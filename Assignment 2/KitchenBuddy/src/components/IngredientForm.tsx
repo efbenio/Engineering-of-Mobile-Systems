@@ -1,3 +1,6 @@
+// The form used both when adding a new ingredient and when editing an existing one.
+// It receives an optional "initial" object to pre-fill the fields (used in EditScreen).
+
 import React, { useState } from 'react'
 import {
   View,
@@ -8,33 +11,45 @@ import {
   Platform,
   StyleSheet,
   Alert,
+  Switch,
 } from 'react-native'
 import DateTimePicker from '@react-native-community/datetimepicker'
-import { Category, ConfectionType, Ingredient, IngredientFormData, StorageLocation } from '../types'
+import {
+  Category,
+  ConfectionType,
+  Ingredient,
+  IngredientFormData,
+  RipenessStatus,
+  StorageLocation,
+} from '../types'
+import {
+  CATEGORIES,
+  LOCATIONS,
+  CONFECTION_TYPES,
+  RIPENESS_STATUSES,
+  SIX_MONTHS_DAYS,
+  addDays,
+  extendExpiryToAtLeast,
+} from '../utils/ingredients'
+import { Colors, Spacing, Radii, FontSizes } from '../theme'
 
-const CATEGORIES: Category[] = ['fruit', 'vegetable', 'dairy', 'fish', 'meat', 'liquid', 'other']
-const LOCATIONS: StorageLocation[] = ['fridge', 'freezer', 'pantry']
-const CONFECTION_TYPES: ConfectionType[] = ['fresh', 'canned', 'frozen', 'cured']
+// Quick date shortcuts so users don't always have to open the date picker
 const ESTIMATES = [
   { label: '1 week', days: 7 },
   { label: '10 days', days: 10 },
   { label: '1 month', days: 30 },
 ]
 
-const addDays = (days: number): Date => {
-  const d = new Date()
-  d.setDate(d.getDate() + days)
-  return d
-}
-
 interface Props {
-  initial?: Ingredient
+  initial?: Partial<Ingredient>    // Pre-fills the form when editing
   onSubmit: (data: IngredientFormData) => void
-  submitLabel: string
+  submitLabel: string              // "Add ingredient" or "Save changes"
+  onDelete?: () => void            // If provided, a delete button appears below the submit button
 }
 
-export const IngredientForm: React.FC<Props> = ({ initial, onSubmit, submitLabel }) => {
+export const IngredientForm: React.FC<Props> = ({ initial, onSubmit, submitLabel, onDelete }) => {
   const [name, setName] = useState(initial?.name ?? '')
+  const [brand, setBrand] = useState(initial?.brand ?? '')
   const [category, setCategory] = useState<Category | undefined>(initial?.category)
   const [location, setLocation] = useState<StorageLocation | undefined>(initial?.location)
   const [confectionType, setConfectionType] = useState<ConfectionType | undefined>(
@@ -44,20 +59,56 @@ export const IngredientForm: React.FC<Props> = ({ initial, onSubmit, submitLabel
     initial?.expirationDate ? new Date(initial.expirationDate) : undefined
   )
   const [showPicker, setShowPicker] = useState(false)
+  const [ripeness, setRipeness] = useState<RipenessStatus | undefined>(initial?.ripeness)
+  const [ripenessCheckedAt, setRipenessCheckedAt] = useState<string | undefined>(
+    initial?.ripenessCheckedAt
+  )
+  const [isFrozen, setIsFrozen] = useState(initial?.isFrozen ?? false)
+  const [isOpen, setIsOpen] = useState(initial?.isOpen ?? false)
+  const [openedAt, setOpenedAt] = useState<string | undefined>(initial?.openedAt)
 
-  const handleSubmit = () => {
+  // Stamp the current time so the "Check ripeness" tab knows when we last looked at this item
+  const handleRipenessChange = (r: RipenessStatus | undefined): void => {
+    setRipeness(r)
+    setRipenessCheckedAt(r ? new Date().toISOString() : undefined)
+  }
+
+  // Toggling frozen also pushes the expiry forward to at least 6 months from now
+  const handleFrozenToggle = (next: boolean): void => {
+    setIsFrozen(next)
+    if (next) {
+      setExpirationDate(extendExpiryToAtLeast(expirationDate, SIX_MONTHS_DAYS))
+    }
+  }
+
+  // Record when the package was first opened so we can track freshness
+  const handleOpenToggle = (next: boolean): void => {
+    setIsOpen(next)
+    setOpenedAt(next ? (openedAt ?? new Date().toISOString()) : undefined)
+  }
+
+  const handleSubmit = (): void => {
     if (!name.trim()) {
       Alert.alert('Name required', 'Please enter the ingredient name.')
       return
     }
     onSubmit({
       name: name.trim(),
+      brand: brand.trim() || undefined,
       category,
       location,
       confectionType,
       expirationDate: expirationDate?.toISOString(),
+      ripeness,
+      ripenessCheckedAt,
+      isFrozen,
+      isOpen,
+      openedAt,
     })
   }
+
+  // Ripeness and frozen toggle only make sense for fresh items
+  const isFresh = confectionType === 'fresh'
 
   return (
     <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
@@ -67,7 +118,16 @@ export const IngredientForm: React.FC<Props> = ({ initial, onSubmit, submitLabel
         value={name}
         onChangeText={setName}
         placeholder="e.g. Milk"
-        placeholderTextColor="#aaa"
+        placeholderTextColor={Colors.placeholder}
+      />
+
+      <Text style={styles.label}>Brand</Text>
+      <TextInput
+        style={styles.input}
+        value={brand}
+        onChangeText={setBrand}
+        placeholder="e.g. Danone"
+        placeholderTextColor={Colors.placeholder}
       />
 
       <ChipPicker label="Category" options={CATEGORIES} value={category} onChange={setCategory} />
@@ -79,10 +139,49 @@ export const IngredientForm: React.FC<Props> = ({ initial, onSubmit, submitLabel
         onChange={setConfectionType}
       />
 
+      {isFresh && (
+        <>
+          <ChipPicker
+            label="Ripeness"
+            options={RIPENESS_STATUSES}
+            value={ripeness}
+            onChange={handleRipenessChange}
+          />
+
+          <Text style={styles.label}>Frozen</Text>
+          <View style={styles.toggleRow}>
+            <Switch
+              value={isFrozen}
+              onValueChange={handleFrozenToggle}
+              trackColor={{ true: Colors.primary }}
+            />
+            <Text style={styles.toggleLabel}>
+              {isFrozen ? 'Yes — extends expiry to at least 6 months' : 'No'}
+            </Text>
+          </View>
+        </>
+      )}
+
+      <Text style={styles.label}>Open</Text>
+      <View style={styles.toggleRow}>
+        <Switch
+          value={isOpen}
+          onValueChange={handleOpenToggle}
+          trackColor={{ true: Colors.primary }}
+        />
+        <Text style={styles.toggleLabel}>
+          {isOpen ? 'Opened — update expiry below if needed' : 'Closed / not opened'}
+        </Text>
+      </View>
+
       <Text style={styles.label}>Expiration date</Text>
       <View style={styles.row}>
         {ESTIMATES.map(({ label, days }) => (
-          <TouchableOpacity key={label} style={styles.chip} onPress={() => setExpirationDate(addDays(days))}>
+          <TouchableOpacity
+            key={label}
+            style={styles.chip}
+            onPress={() => setExpirationDate(addDays(days))}
+          >
             <Text style={styles.chipText}>{label}</Text>
           </TouchableOpacity>
         ))}
@@ -120,10 +219,19 @@ export const IngredientForm: React.FC<Props> = ({ initial, onSubmit, submitLabel
       <TouchableOpacity style={styles.submitButton} onPress={handleSubmit}>
         <Text style={styles.submitText}>{submitLabel}</Text>
       </TouchableOpacity>
+
+      {/* Only shown on the Edit screen */}
+      {onDelete && (
+        <TouchableOpacity style={styles.deleteButton} onPress={onDelete}>
+          <Text style={styles.deleteText}>Delete ingredient</Text>
+        </TouchableOpacity>
+      )}
     </ScrollView>
   )
 }
 
+// A row of tappable chips that lets the user pick one option from a list.
+// Tapping the already-selected chip deselects it (sets the value back to undefined).
 interface ChipPickerProps<T extends string> {
   label: string
   options: T[]
@@ -131,7 +239,12 @@ interface ChipPickerProps<T extends string> {
   onChange: (v: T | undefined) => void
 }
 
-function ChipPicker<T extends string>({ label, options, value, onChange }: ChipPickerProps<T>) {
+function ChipPicker<T extends string>({
+  label,
+  options,
+  value,
+  onChange,
+}: ChipPickerProps<T>): React.ReactElement {
   return (
     <>
       <Text style={styles.label}>{label}</Text>
@@ -142,7 +255,9 @@ function ChipPicker<T extends string>({ label, options, value, onChange }: ChipP
             style={[styles.chip, value === opt && styles.chipSelected]}
             onPress={() => onChange(value === opt ? undefined : opt)}
           >
-            <Text style={[styles.chipText, value === opt && styles.chipTextSelected]}>{opt}</Text>
+            <Text style={[styles.chipText, value === opt && styles.chipTextSelected]}>
+              {opt.replace('_', ' ')}
+            </Text>
           </TouchableOpacity>
         ))}
       </View>
@@ -151,39 +266,55 @@ function ChipPicker<T extends string>({ label, options, value, onChange }: ChipP
 }
 
 const styles = StyleSheet.create({
-  container: { padding: 16, gap: 6 },
-  label: { fontSize: 14, fontWeight: '600', color: '#333', marginTop: 10 },
+  container: { padding: Spacing.lg, gap: Spacing.xs - 2 },
+  label: {
+    fontSize: FontSizes.md,
+    fontWeight: '600',
+    color: Colors.textSecondary,
+    marginTop: 10,
+  },
   input: {
     borderWidth: 1,
-    borderColor: '#ddd',
-    borderRadius: 8,
-    padding: 12,
-    fontSize: 16,
-    color: '#333',
-    backgroundColor: '#fafafa',
+    borderColor: Colors.border,
+    borderRadius: Radii.md,
+    padding: Spacing.md,
+    fontSize: FontSizes.lg,
+    color: Colors.textSecondary,
+    backgroundColor: Colors.surfaceMuted,
   },
-  row: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 4 },
+  row: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm, marginTop: Spacing.xs },
   chip: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 16,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm - 2,
+    borderRadius: Radii.chip,
     borderWidth: 1,
-    borderColor: '#ccc',
-    backgroundColor: '#f5f5f5',
+    borderColor: Colors.borderLight,
+    backgroundColor: Colors.chipBg,
   },
-  chipSelected: { backgroundColor: '#2196F3', borderColor: '#2196F3' },
-  chipText: { fontSize: 13, color: '#555' },
-  chipTextSelected: { color: '#fff' },
-  dateText: { fontSize: 14, color: '#333', paddingVertical: 4 },
-  clearText: { fontSize: 14, color: '#e53935', paddingVertical: 4 },
-  doneButton: { alignSelf: 'flex-end', padding: 8 },
-  doneText: { color: '#2196F3', fontWeight: '600', fontSize: 15 },
+  chipSelected: { backgroundColor: Colors.primary, borderColor: Colors.primary },
+  chipText: { fontSize: FontSizes.body, color: Colors.textMuted },
+  chipTextSelected: { color: Colors.surface },
+  toggleRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: Spacing.xs },
+  toggleLabel: { fontSize: FontSizes.body, color: Colors.textMuted, flex: 1 },
+  dateText: { fontSize: FontSizes.md, color: Colors.textSecondary, paddingVertical: Spacing.xs },
+  clearText: { fontSize: FontSizes.md, color: Colors.danger, paddingVertical: Spacing.xs },
+  doneButton: { alignSelf: 'flex-end', padding: Spacing.sm },
+  doneText: { color: Colors.primary, fontWeight: '600', fontSize: FontSizes.base },
   submitButton: {
-    backgroundColor: '#2196F3',
-    borderRadius: 8,
+    backgroundColor: Colors.primary,
+    borderRadius: Radii.md,
     padding: 14,
     alignItems: 'center',
-    marginTop: 24,
+    marginTop: Spacing.xl,
   },
-  submitText: { color: '#fff', fontSize: 16, fontWeight: '600' },
+  submitText: { color: Colors.surface, fontSize: FontSizes.lg, fontWeight: '600' },
+  deleteButton: {
+    borderRadius: Radii.md,
+    borderWidth: 1,
+    borderColor: Colors.danger,
+    padding: 14,
+    alignItems: 'center',
+    marginTop: Spacing.sm,
+  },
+  deleteText: { color: Colors.danger, fontSize: FontSizes.base, fontWeight: '600' },
 })

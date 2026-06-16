@@ -1,57 +1,48 @@
-import React, { useState } from 'react'
-import { View, Text, TouchableOpacity, ScrollView, StyleSheet } from 'react-native'
+// The Browse screen lets the user filter and search through all ingredients.
+// Filter tabs at the top update the list. Some tabs have a second row of sub-filter chips.
+
+import React from 'react'
+import { View, Text, TouchableOpacity, ScrollView, StyleSheet, ActivityIndicator } from 'react-native'
 import { useNavigation } from '@react-navigation/native'
 import { NativeStackNavigationProp } from '@react-navigation/native-stack'
 import { IngredientList } from '../components/IngredientList'
-import { useIngredients } from '../context'
-import {
-  Category,
-  ConfectionType,
-  Ingredient,
-  RootStackParamList,
-  StorageLocation,
-} from '../types'
+import { RootStackParamList } from '../types'
+import { LOCATIONS, CATEGORIES, CONFECTION_TYPES } from '../utils/ingredients'
+import { useBrowseFilter, QUERY_TABS } from '../hooks/useBrowseFilter'
+import { Colors, Spacing, Radii, FontSizes } from '../theme'
 
 type Nav = NativeStackNavigationProp<RootStackParamList>
-type QueryType = 'missing' | 'recent' | 'location' | 'category' | 'confection'
-
-const QUERY_TABS: { key: QueryType; label: string }[] = [
-  { key: 'missing', label: 'Missing data' },
-  { key: 'recent', label: 'Recent' },
-  { key: 'location', label: 'Location' },
-  { key: 'category', label: 'Category' },
-  { key: 'confection', label: 'Confection' },
-]
-
-const LOCATIONS: StorageLocation[] = ['fridge', 'freezer', 'pantry']
-const CATEGORIES: Category[] = ['fruit', 'vegetable', 'dairy', 'fish', 'meat', 'liquid', 'other']
-const CONFECTION_TYPES: ConfectionType[] = ['fresh', 'canned', 'frozen', 'cured']
 
 export const BrowseScreen: React.FC = () => {
-  const { ingredients } = useIngredients()
   const navigation = useNavigation<Nav>()
-  const [query, setQuery] = useState<QueryType>('missing')
-  const [filterLocation, setFilterLocation] = useState<StorageLocation>('fridge')
-  const [filterCategory, setFilterCategory] = useState<Category>('fruit')
-  const [filterConfection, setFilterConfection] = useState<ConfectionType>('fresh')
+  const {
+    query,
+    setQuery,
+    filterLocation,
+    setFilterLocation,
+    filterCategory,
+    setFilterCategory,
+    filterConfection,
+    setFilterConfection,
+    results,
+    loading,
+    error,
+  } = useBrowseFilter()
 
-  const getResults = (): Ingredient[] => {
-    switch (query) {
-      case 'missing':
-        return ingredients.filter(
-          i => !i.category || !i.location || !i.confectionType || !i.expirationDate
-        )
-      case 'recent':
-        return [...ingredients]
-          .sort((a, b) => new Date(b.addedAt).getTime() - new Date(a.addedAt).getTime())
-          .slice(0, 20)
-      case 'location':
-        return ingredients.filter(i => i.location === filterLocation)
-      case 'category':
-        return ingredients.filter(i => i.category === filterCategory)
-      case 'confection':
-        return ingredients.filter(i => i.confectionType === filterConfection)
-    }
+  if (loading) {
+    return (
+      <View style={styles.centered}>
+        <ActivityIndicator size="large" color={Colors.primary} />
+      </View>
+    )
+  }
+
+  if (error) {
+    return (
+      <View style={styles.centered}>
+        <Text style={styles.errorText}>{error}</Text>
+      </View>
+    )
   }
 
   return (
@@ -73,6 +64,7 @@ export const BrowseScreen: React.FC = () => {
         ))}
       </ScrollView>
 
+      {/* Show a second row of chips to pick a value when a filter tab is selected */}
       {query === 'location' && (
         <SubFilter options={LOCATIONS} value={filterLocation} onChange={setFilterLocation} />
       )}
@@ -80,29 +72,30 @@ export const BrowseScreen: React.FC = () => {
         <SubFilter options={CATEGORIES} value={filterCategory} onChange={setFilterCategory} />
       )}
       {query === 'confection' && (
-        <SubFilter
-          options={CONFECTION_TYPES}
-          value={filterConfection}
-          onChange={setFilterConfection}
-        />
+        <SubFilter options={CONFECTION_TYPES} value={filterConfection} onChange={setFilterConfection} />
       )}
 
       <IngredientList
-        ingredients={getResults()}
+        ingredients={results}
         onSelect={item => navigation.navigate('Edit', { id: item.id })}
-        emptyMessage="No ingredients match this query."
+        emptyMessage={
+          query === 'ripeness_check'
+            ? 'All fresh items have been checked recently.'
+            : 'No ingredients match this query.'
+        }
       />
     </View>
   )
 }
 
+// A row of chips used as a secondary filter below the main tab bar
 interface SubFilterProps<T extends string> {
   options: T[]
   value: T
   onChange: (v: T) => void
 }
 
-function SubFilter<T extends string>({ options, value, onChange }: SubFilterProps<T>) {
+function SubFilter<T extends string>({ options, value, onChange }: SubFilterProps<T>): React.ReactElement {
   return (
     <View style={styles.subFilter}>
       {options.map(opt => (
@@ -119,43 +112,50 @@ function SubFilter<T extends string>({ options, value, onChange }: SubFilterProp
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f7f7f7' },
+  container: { flex: 1, backgroundColor: Colors.background },
+  centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  errorText: {
+    fontSize: FontSizes.base,
+    color: Colors.danger,
+    textAlign: 'center',
+    padding: Spacing.lg,
+  },
   tabsScroll: {
     flexGrow: 0,
-    backgroundColor: '#fff',
+    backgroundColor: Colors.surface,
     borderBottomWidth: 1,
-    borderBottomColor: '#eee',
+    borderBottomColor: Colors.divider,
   },
-  tabsContent: { paddingHorizontal: 8, paddingVertical: 10, gap: 6 },
+  tabsContent: { paddingHorizontal: Spacing.sm, paddingVertical: 10, gap: Spacing.sm - 2 },
   tab: {
     paddingHorizontal: 14,
-    paddingVertical: 6,
-    borderRadius: 16,
+    paddingVertical: Spacing.sm - 2,
+    borderRadius: Radii.chip,
     borderWidth: 1,
-    borderColor: '#ddd',
-    backgroundColor: '#f5f5f5',
+    borderColor: Colors.border,
+    backgroundColor: Colors.chipBg,
   },
-  tabActive: { backgroundColor: '#2196F3', borderColor: '#2196F3' },
-  tabText: { fontSize: 13, color: '#555' },
-  tabTextActive: { color: '#fff', fontWeight: '600' },
+  tabActive: { backgroundColor: Colors.primary, borderColor: Colors.primary },
+  tabText: { fontSize: FontSizes.body, color: Colors.textMuted },
+  tabTextActive: { color: Colors.surface, fontWeight: '600' },
   subFilter: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 8,
-    padding: 12,
-    backgroundColor: '#fff',
+    gap: Spacing.sm,
+    padding: Spacing.md,
+    backgroundColor: Colors.surface,
     borderBottomWidth: 1,
-    borderBottomColor: '#eee',
+    borderBottomColor: Colors.divider,
   },
   chip: {
-    paddingHorizontal: 12,
+    paddingHorizontal: Spacing.md,
     paddingVertical: 5,
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: '#ccc',
-    backgroundColor: '#f5f5f5',
+    borderColor: Colors.borderLight,
+    backgroundColor: Colors.chipBg,
   },
-  chipActive: { backgroundColor: '#1976D2', borderColor: '#1976D2' },
-  chipText: { fontSize: 12, color: '#555' },
-  chipTextActive: { color: '#fff' },
+  chipActive: { backgroundColor: Colors.primaryDark, borderColor: Colors.primaryDark },
+  chipText: { fontSize: FontSizes.sm, color: Colors.textMuted },
+  chipTextActive: { color: Colors.surface },
 })
